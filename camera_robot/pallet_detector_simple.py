@@ -1,155 +1,198 @@
 #!/usr/bin/env python3
+"""
+pallet_detector_simple.py
+简化托盘检测节点：HSV 颜色过滤 + 深度图测距。
+- 订阅 /camera_robot/rgb/image_raw      (彩色图)
+- 订阅 /camera_robot/depth/image_raw    (深度图, 32FC1, 单位: 米)
+- 发布 /camera_robot/annotated_image    (标注结果图)
+"""
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-import math
+
 
 class SimplePalletDetector(Node):
     def __init__(self):
         super().__init__('simple_pallet_detector')
-        
-        # 创建图像转换器
+
         self.bridge = CvBridge()
-        
-        # 订阅RGB图像
-        self.rgb_subscription = self.create_subscription(
+
+        # ---------- 订阅者 ----------
+        self.rgb_sub = self.create_subscription(
             Image,
-            '/camera_robot/rgbd_camera/image_raw',
-            self.image_callback,
+            '/camera_robot/rgb/image_raw',
+            self.rgb_callback,
             10
         )
-        
-        # 发布标记后的图像
-        self.annotated_publisher = self.create_publisher(
+        self.depth_sub = self.create_subscription(
+            Image,
+            '/camera_robot/depth/image_raw',
+            self.depth_callback,
+            10
+        )
+
+        # ---------- 发布者 ----------
+        self.annotated_pub = self.create_publisher(
             Image,
             '/camera_robot/annotated_image',
             10
         )
-        
-        # 托盘参数
-        self.pallet_width_pixels = 100  # 估计的托盘像素宽度
-        self.focal_length = 500  # 估计的焦距（像素）
-        
-        self.get_logger().info("简化托盘识别节点已启动!")
-    
-    def image_callback(self, msg):
-        """处理图像回调"""
+
+        # ---------- 内部状态 ----------
+        self.current_depth = None
+        # 焦距估计（像素），在没有相机内参时使用
+        # Gazebo 默认：horizontal_fov=1.047 rad，width=640 → fx ≈ 640/(2*tan(0.5235))≈ 554
+        self.focal_length = 554.0
+        # 托盘实际宽度（米），对应 pallet/model.sdf 的 1.2m
+        self.pallet_real_width = 1.2
+
+        self.get_logger().info("简化托盘识别节点（深度辅助）已启动！")
+        self.get_logger().info("  彩色图：/camera_robot/rgb/image_raw")
+        self.get_logger().info("  深度图：/camera_robot/depth/image_raw")
+
+    # ==================== 回调 ====================
+
+    def depth_callback(self, msg):
         try:
-            # 转换为OpenCV格式
+            if msg.encoding == '16UC1':
+                raw = self.bridge.imgmsg_to_cv2(msg, desired_encoding='16UC1')
+                self.current_depth = raw.astype(np.float32) / 1000.0
+            else:
+                self.current_depth = self.bridge.imgmsg_to_cv2(
+                    msg, desired_encoding='32FC1'
+                )
+        except Exception as e:
+            self.get_logger().warning(f"深度图转换错误: {e}")
+            self.current_depth = None
+
+    def rgb_callback(self, msg):
+        try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-            
-            # 检测托盘
-            annotated_image, position_text = self.detect_pallet_simple(cv_image)
-            
-            # 发布标注后的图像
-            self.publish_annotated_image(annotated_image)
-            
-            if position_text:
-                self.get_logger().info(position_text)
-                
+            annotated, info = self.detect(cv_image)
+            self.publish_annotated(annotated)
+            if info:
+                self.get_logger().info(info)
         except Exception as e:
             self.get_logger().error(f"图像处理错误: {e}")
-    
-    def detect_pallet_simple(self, image):
-        """简化的托盘检测"""
-        # 转换为HSV颜色空间
+
+    # ==================== 检测 ====================
+
+    def detect(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        
-        # 定义木色（托盘颜色）的HSV范围
-        lower_wood = np.array([10, 50, 50])
-        upper_wood = np.array([30, 255, 255])
-        
-        # 创建掩码
+
+        # 木色 HSV 范围（棕黄色托盘）
+        lower_wood = np.array([8,  40,  60])
+        upper_wood = np.array([35, 255, 255])
         mask = cv2.inRange(hsv, lower_wood, upper_wood)
-        
-        # 形态学操作
-        kernel = np.ones((5, 5), np.uint8)
+
+        # 形态学去噪
+        kernel = np.ones((7, 7), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        
-        # 查找轮廓
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # 复制图像用于标注
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel)
+
+        contours, _ = cv2.findContours(
+            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+
         annotated = image.copy()
-        position_text = None
-        
+        info_text = None
+
         if contours:
-            # 找到最大的轮廓（假设是托盘）
-            largest_contour = max(contours, key=cv2.contourArea)
-            
-            # 计算边界框
-            x, y, w, h = cv2.boundingRect(largest_contour)
-            
-            # 过滤太小或太大的区域
-            if w > 50 and h > 50:
-                # 绘制红色边界框
-                cv2.rectangle(annotated, (x, y), (x+w, y+h), (0, 0, 255), 3)
-                
-                # 计算托盘中心
-                center_x = x + w // 2
-                center_y = y + h // 2
-                
-                # 绘制中心点
-                cv2.circle(annotated, (center_x, center_y), 5, (255, 0, 0), -1)
-                
-                # 估计距离（基于透视原理）
-                # 假设已知托盘实际宽度为0.3m
-                distance = (0.3 * self.focal_length) / w if w > 0 else 0
-                
-                # 计算相对于相机的近似位置
-                # 假设图像中心为相机光心
-                image_center_x = image.shape[1] // 2
-                image_center_y = image.shape[0] // 2
-                
-                x_offset = (center_x - image_center_x) * distance / self.focal_length
-                y_offset = (center_y - image_center_y) * distance / self.focal_length
-                
-                # 准备位置文本
-                position_text = (
+            largest = max(contours, key=cv2.contourArea)
+            x, y, w, h = cv2.boundingRect(largest)
+
+            if w > 40 and h > 40:
+                cx = x + w // 2
+                cy = y + h // 2
+                img_cx = image.shape[1] // 2
+                img_cy = image.shape[0] // 2
+
+                # ---------- 距离估计 ----------
+                if self.current_depth is not None:
+                    # 取检测框中心区域的中值深度（更鲁棒）
+                    dh, dw = self.current_depth.shape[:2]
+                    r0 = max(0, cy - h // 6)
+                    r1 = min(dh, cy + h // 6)
+                    c0 = max(0, cx - w // 6)
+                    c1 = min(dw, cx + w // 6)
+                    patch = self.current_depth[r0:r1, c0:c1]
+                    valid = patch[np.isfinite(patch) & (patch > 0.05)]
+                    if valid.size > 0:
+                        distance = float(np.median(valid))
+                        depth_source = "depth"
+                    else:
+                        distance = self._estimate_by_size(w)
+                        depth_source = "size(fallback)"
+                else:
+                    distance = self._estimate_by_size(w)
+                    depth_source = "size"
+
+                # 水平/垂直偏移（简单针孔模型）
+                x_offset = (cx - img_cx) * distance / self.focal_length
+                y_offset = (cy - img_cy) * distance / self.focal_length
+
+                # ---------- 绘制 ----------
+                cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 0, 255), 3)
+                cv2.circle(annotated, (cx, cy), 6, (255, 0, 0), -1)
+                cv2.line(annotated, (img_cx, img_cy), (cx, cy), (200, 200, 0), 1)
+
+                cv2.putText(annotated,
+                            f"Dist: {distance:.2f}m [{depth_source}]",
+                            (x, max(y - 12, 20)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+                cv2.putText(annotated,
+                            f"Offset: ({x_offset:.2f}, {y_offset:.2f}) m",
+                            (x, y + h + 22),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+
+                info_text = (
                     f"Pallet detected! "
-                    f"Distance: {distance:.2f}m, "
-                    f"X offset: {x_offset:.2f}m, "
-                    f"Y offset: {y_offset:.2f}m"
+                    f"Dist={distance:.2f}m, "
+                    f"X={x_offset:.2f}m, Y={y_offset:.2f}m "
+                    f"[{depth_source}]"
                 )
-                
-                # 在图像上添加文本
-                cv2.putText(annotated, f"Distance: {distance:.2f}m", 
-                           (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-                cv2.putText(annotated, f"Position: ({x_offset:.2f}, {y_offset:.2f})", 
-                           (x, y+h+25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        
-        # 添加检测状态
-        status = "DETECTED" if position_text else "SEARCHING"
-        color = (0, 255, 0) if position_text else (0, 0, 255)
-        cv2.putText(annotated, f"Status: {status}", (20, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        
-        return annotated, position_text
-    
-    def publish_annotated_image(self, image):
-        """发布标注后的图像"""
+
+        # 状态文字
+        color  = (0, 255, 0) if info_text else (0, 0, 255)
+        status = "DETECTED"  if info_text else "SEARCHING"
+        cv2.putText(annotated, f"Status: {status}", (18, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+        return annotated, info_text
+
+    def _estimate_by_size(self, pixel_width):
+        """根据目标像素宽度和已知实际宽度估计距离。"""
+        if pixel_width > 0:
+            return (self.pallet_real_width * self.focal_length) / pixel_width
+        return 0.0
+
+    # ==================== 发布 ====================
+
+    def publish_annotated(self, image):
         try:
             msg = self.bridge.cv2_to_imgmsg(image, "bgr8")
-            self.annotated_publisher.publish(msg)
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = "camera_link"
+            self.annotated_pub.publish(msg)
         except Exception as e:
-            self.get_logger().error(f"发布图像错误: {e}")
+            self.get_logger().error(f"发布标注图像错误: {e}")
+
 
 def main(args=None):
     rclpy.init(args=args)
-    
-    detector = SimplePalletDetector()
-    
+    node = SimplePalletDetector()
     try:
-        rclpy.spin(detector)
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        detector.destroy_node()
+        node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
