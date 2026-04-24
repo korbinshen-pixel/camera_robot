@@ -22,6 +22,10 @@ setup(
          glob('models/pallet/*')),
         # 世界文件
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*')),
+        # config 目录
+        (os.path.join('share', package_name, 'config'),
+        glob('config/*')),
+
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -37,6 +41,7 @@ setup(
             'pallet_detector         = camera_robot.pallet_detector:main',
             'pallet_detector_simple  = camera_robot.pallet_detector_simple:main',
             'lidar_viewer            = camera_robot.lidar_viewer:main',
+            'goal_navigator = camera_robot.goal_navigator:main',
         ],
     },
 )

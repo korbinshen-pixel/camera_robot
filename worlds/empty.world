@@ -1,66 +1,190 @@
 <?xml version="1.0" ?>
 <sdf version="1.6">
   <world name="default">
-    <light name="sun" type="directional">
-      <cast_shadows>true</cast_shadows>
-      <pose>0 0 10 0 0 0</pose>
-      <diffuse>0.8 0.8 0.8 1</diffuse>
-      <specular>0.2 0.2 0.2 1</specular>
-      <attenuation>
-        <range>1000</range>
-        <constant>0.9</constant>
-        <linear>0.01</linear>
-        <quadratic>0.001</quadratic>
-      </attenuation>
-      <direction>-0.5 0.1 -0.9</direction>
-    </light>
-    
-    <physics name="default_physics" default="0" type="ode">
-      <max_step_size>0.001</max_step_size>
-      <real_time_factor>1.0</real_time_factor>
-      <real_time_update_rate>1000</real_time_update_rate>
-    </physics>
-    
-    <scene>
-      <ambient>0.4 0.4 0.4 1</ambient>
-      <background>0.7 0.7 0.7 1</background>
-      <shadows>true</shadows>
-    </scene>
-    
+
+    <!-- 光源 -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
     <!-- 地面 -->
-    <model name="ground_plane">
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- 物理参数 -->
+    <physics type="ode">
+      <real_time_update_rate>1000.0</real_time_update_rate>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+    </physics>
+
+    <!-- ==================== 围墙（10m × 10m，中心在原点）==================== -->
+
+    <!-- 北墙（+Y，y=5） -->
+    <model name="wall_north">
       <static>true</static>
+      <pose>0 5 0.5 0 0 0</pose>
       <link name="link">
         <collision name="collision">
-          <geometry>
-            <plane>
-              <normal>0 0 1</normal>
-              <size>100 100</size>
-            </plane>
-          </geometry>
-          <surface>
-            <friction>
-              <ode>
-                <mu>100</mu>
-                <mu2>50</mu2>
-              </ode>
-            </friction>
-          </surface>
+          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
         </collision>
         <visual name="visual">
-          <geometry>
-            <plane>
-              <normal>0 0 1</normal>
-              <size>100 100</size>
-            </plane>
-          </geometry>
+          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
           <material>
-            <ambient>0.8 0.8 0.8 1</ambient>
-            <diffuse>0.8 0.8 0.8 1</diffuse>
-            <specular>0.8 0.8 0.8 1</specular>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
           </material>
         </visual>
       </link>
     </model>
+
+    <!-- 南墙（-Y，y=-5） -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 东墙（+X，x=5） -->
+    <model name="wall_east">
+      <static>true</static>
+      <pose>5 0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 西墙（-X，x=-5） -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-5 0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ==================== 货架布局 ====================
+         围墙内径 10m×10m，x∈[-5,5]，y∈[-5,5]
+         货架缩放 0.5，靠墙留 0.6m 间距（货架深度约 0.5m）
+
+         布局示意（俯视）：
+         ┌──[N1]──[N2]──[N3]──┐
+         │                    │
+        [W1]                [E1]
+        [W2]                [E2]
+         │                    │
+         └──[S1]──[S2]──[S3]──┘
+
+         小车起点在原点(0,0)，中央留有通道
+    ====================================================== -->
+
+    <!-- 北墙货架（朝向南，face -Y，yaw=3.14） -->
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_N1</name>
+      <pose>-3 4.2 0 0 0 3.14</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_N2</name>
+      <pose>0 4.2 0 0 0 3.14</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_N3</name>
+      <pose>3 4.2 0 0 0 3.14</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <!-- 南墙货架（朝向北，face +Y，yaw=0） -->
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_S1</name>
+      <pose>-3 -4.2 0 0 0 0</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_S2</name>
+      <pose>0 -4.2 0 0 0 0</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_S3</name>
+      <pose>3 -4.2 0 0 0 0</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <!-- 西墙货架（朝向东，face +X，yaw=1.57） -->
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_W1</name>
+      <pose>-4.2 2 0 0 0 1.57</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_W2</name>
+      <pose>-4.2 -2 0 0 0 1.57</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <!-- 东墙货架（朝向西，face -X，yaw=-1.57） -->
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_E1</name>
+      <pose>4.2 2 0 0 0 -1.57</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
+    <include>
+      <uri>model://shelf</uri>
+      <name>shelf_E2</name>
+      <pose>4.2 -2 0 0 0 -1.57</pose>
+      <scale>0.5 0.5 0.5</scale>
+    </include>
+
   </world>
 </sdf>

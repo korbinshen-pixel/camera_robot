@@ -1,0 +1,28 @@
+slam_toolbox:
+  ros__parameters:
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /camera_robot/scan
+    mode: mapping
+
+    # ── 增大队列，解决 dropping message 问题 ──
+    transform_timeout: 0.5          # 等待 TF 的超时时间（秒）
+    tf_buffer_duration: 30.0        # TF 缓冲时长
+    message_filter_queue_size: 50   # 消息过滤器队列大小（默认10，改大）
+
+    map_update_interval: 0.5
+    resolution: 0.05
+    max_laser_range: 12.0
+
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    serialize_map_duration: 5.0
+    serialization_filename: /tmp/camera_robot_map
+
+    use_sim_time: true

@@ -28,12 +28,11 @@ def generate_launch_description():
 
     # 2. 键盘控制（在 xterm 窗口中运行）
     keyboard_control = Node(
-        package='teleop_twist_keyboard',
-        executable='teleop_twist_keyboard',
-        name='teleop_twist_keyboard',
-        prefix='xterm -e',
-        output='screen',
-        remappings=[('/cmd_vel', '/camera_robot/cmd_vel')]
+        package='camera_robot',
+        executable='robot_controller',
+        name='robot_controller',
+        output='screen',        # 在当前终端显示速度信息
+        prefix='xterm -e',      # 在独立窗口接收键盘输入
     )
 
     # 3. 托盘检测节点（RGBD 深度相机版）
@@ -68,6 +67,13 @@ def generate_launch_description():
         arguments=['/camera_robot/lidar_image']
     )
 
+    goal_navigator = Node(
+        package='camera_robot',
+        executable='goal_navigator',
+        name='goal_navigator',
+        output='screen'
+    )
+
     return LaunchDescription([
         spawn_robot,
         keyboard_control,
@@ -75,4 +81,5 @@ def generate_launch_description():
         lidar_viewer,
         rqt_annotated,
         rqt_lidar,
+        # goal_navigator,
     ])

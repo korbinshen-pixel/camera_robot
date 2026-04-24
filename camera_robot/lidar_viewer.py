@@ -50,16 +50,16 @@ class LidarViewer(Node):
     def scan_callback(self, msg: LaserScan):
         ranges = np.array(msg.ranges, dtype=np.float32)
 
-        # ---------- 统计信息 ----------
-        valid = ranges[np.isfinite(ranges) & (ranges > msg.range_min) & (ranges < msg.range_max)]
-        if valid.size > 0:
-            self.get_logger().info(
-                f"[LiDAR] points={valid.size}/{len(ranges)}  "
-                f"min={valid.min():.2f}m  max={valid.max():.2f}m  "
-                f"mean={valid.mean():.2f}m"
-            )
-        else:
-            self.get_logger().info("[LiDAR] 无有效点")
+        # # ---------- 统计信息 ----------
+        # valid = ranges[np.isfinite(ranges) & (ranges > msg.range_min) & (ranges < msg.range_max)]
+        # if valid.size > 0:
+        #     self.get_logger().info(
+        #         f"[LiDAR] points={valid.size}/{len(ranges)}  "
+        #         f"min={valid.min():.2f}m  max={valid.max():.2f}m  "
+        #         f"mean={valid.mean():.2f}m"
+        #     )
+        # else:
+        #     self.get_logger().info("[LiDAR] 无有效点")
 
         # ---------- 生成俯视图 ----------
         canvas = self._make_canvas(msg, ranges)
