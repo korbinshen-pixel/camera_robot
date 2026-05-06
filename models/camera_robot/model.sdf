@@ -6,7 +6,7 @@
       <pose>0 0 0.13 0 0 0</pose>
 
       <inertial>
-        <mass>8.0</mass>
+        <mass>15.0</mass>
         <inertia>
           <ixx>0.15</ixx><ixy>0</ixy><ixz>0</ixz>
           <iyy>0.20</iyy><iyz>0</iyz>
@@ -48,7 +48,7 @@
     <link name="front_left_wheel">
       <pose>0.2 0.205 0.075 1.5708 0 0</pose>
       <inertial>
-        <mass>0.8</mass>
+        <mass>1.5</mass>
         <inertia>
           <ixx>0.012</ixx><ixy>0</ixy><ixz>0</ixz>
           <iyy>0.012</iyy><iyz>0</iyz>
@@ -81,7 +81,7 @@
     <link name="front_right_wheel">
       <pose>0.2 -0.205 0.075 1.5708 0 0</pose>
       <inertial>
-        <mass>0.8</mass>
+        <mass>1.5</mass>
         <inertia>
           <ixx>0.012</ixx><ixy>0</ixy><ixz>0</ixz>
           <iyy>0.012</iyy><iyz>0</iyz>
@@ -114,7 +114,7 @@
     <link name="rear_left_wheel">
       <pose>-0.2 0.205 0.075 1.5708 0 0</pose>
       <inertial>
-        <mass>0.8</mass>
+        <mass>1.5</mass>
         <inertia>
           <ixx>0.012</ixx><ixy>0</ixy><ixz>0</ixz>
           <iyy>0.012</iyy><iyz>0</iyz>
@@ -147,7 +147,7 @@
     <link name="rear_right_wheel">
       <pose>-0.2 -0.205 0.075 1.5708 0 0</pose>
       <inertial>
-        <mass>0.8</mass>
+        <mass>1.5</mass>
         <inertia>
           <ixx>0.012</ixx><ixy>0</ixy><ixz>0</ixz>
           <iyy>0.012</iyy><iyz>0</iyz>
@@ -178,7 +178,7 @@
 
     <!-- ==================== RGBD 深度相机 ==================== -->
     <link name="camera_link">
-      <pose>0.25 0 0.28 0 0 0</pose>
+      <pose>0.32 0 0.114 0 0 0</pose>
       <inertial>
         <mass>0.2</mass>
         <inertia>
@@ -301,7 +301,7 @@
       <parent>base_link</parent>
       <child>front_left_wheel</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>0 0 -1</xyz>
         <limit><effort>10</effort><velocity>100</velocity></limit>
         <dynamics><damping>0.1</damping><friction>0.1</friction></dynamics>
       </axis>
@@ -312,7 +312,7 @@
       <parent>base_link</parent>
       <child>front_right_wheel</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>0 0 -1</xyz>
         <limit><effort>10</effort><velocity>100</velocity></limit>
         <dynamics><damping>0.1</damping><friction>0.1</friction></dynamics>
       </axis>
@@ -323,7 +323,7 @@
       <parent>base_link</parent>
       <child>rear_left_wheel</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>0 0 -1</xyz>
         <limit><effort>10</effort><velocity>100</velocity></limit>
         <dynamics><damping>0.1</damping><friction>0.1</friction></dynamics>
       </axis>
@@ -334,7 +334,7 @@
       <parent>base_link</parent>
       <child>rear_right_wheel</child>
       <axis>
-        <xyz>0 0 1</xyz>
+        <xyz>0 0 -1</xyz>
         <limit><effort>10</effort><velocity>100</velocity></limit>
         <dynamics><damping>0.1</damping><friction>0.1</friction></dynamics>
       </axis>
@@ -374,7 +374,7 @@
       <right_joint>front_right_wheel_joint</right_joint>
       <right_joint>rear_right_wheel_joint</right_joint>
 
-      <wheel_separation>0.38</wheel_separation>
+      <wheel_separation>0.41</wheel_separation>
       <wheel_diameter>0.15</wheel_diameter>
       <max_wheel_torque>15</max_wheel_torque>
       <max_wheel_acceleration>5.0</max_wheel_acceleration>
@@ -387,6 +387,16 @@
       <publish_odom>true</publish_odom>
       <publish_odom_tf>true</publish_odom_tf>
       <publish_wheel_tf>true</publish_wheel_tf>
+    </plugin>
+
+    <plugin name="pallet_pose_ground_truth" filename="libgazebo_ros_p3d.so">
+      <ros>
+        <namespace>/ground_truth</namespace>
+        <remapping>odom:=pallet_pose</remapping>
+      </ros>
+      <body_name>base_link</body_name>
+      <frame_name>camera_link</frame_name>  <!-- 相对于相机坐标系 -->
+      <update_rate>30.0</update_rate>
     </plugin>
 
   </model>

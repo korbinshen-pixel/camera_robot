@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 import os
 from glob import glob
 
@@ -7,25 +7,38 @@ package_name = 'camera_robot'
 setup(
     name=package_name,
     version='0.1.0',
-    packages=[package_name],
+    packages=find_packages(include=[
+        'camera_robot',
+        'camera_robot.*',
+    ]),
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+
         # launch 文件
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        (os.path.join('share', package_name, 'launch'),
+         glob('launch/*.py')),
+
         # 机器人模型文件
         (os.path.join('share', package_name, 'models', 'camera_robot'),
          glob('models/camera_robot/*')),
+
         # 托盘模型文件
         (os.path.join('share', package_name, 'models', 'pallet'),
          glob('models/pallet/*')),
+
         # 世界文件
-        (os.path.join('share', package_name, 'worlds'), glob('worlds/*')),
+        (os.path.join('share', package_name, 'worlds'),
+         glob('worlds/*')),
+
         # config 目录
         (os.path.join('share', package_name, 'config'),
-        glob('config/*')),
+         glob('config/*')),
 
+        # 权重文件
+        (os.path.join('share', package_name, 'resource', 'weights'),
+         glob('resource/weights/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -36,12 +49,15 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'robot_controller        = camera_robot.robot_controller:main',
-            'camera_viewer           = camera_robot.camera_viewer:main',
-            'pallet_detector         = camera_robot.pallet_detector:main',
-            'pallet_detector_simple  = camera_robot.pallet_detector_simple:main',
-            'lidar_viewer            = camera_robot.lidar_viewer:main',
+            'robot_controller = camera_robot.robot_controller:main',
+            'camera_viewer = camera_robot.camera_viewer:main',
+            'pallet_detector = camera_robot.pallet_detector:main',
+            'pallet_detector_simple = camera_robot.pallet_detector_simple:main',
+            'lidar_viewer = camera_robot.lidar_viewer:main',
             'goal_navigator = camera_robot.goal_navigator:main',
+            'deep_pallet_detector = camera_robot.deep_pallet_detector:main',
+            'pallet_data_collector = camera_robot.pallet_data_collector:main',
+            'pallet_pickup_mission = camera_robot.pallet_pickup_mission:main',
         ],
     },
 )

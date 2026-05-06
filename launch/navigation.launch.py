@@ -78,6 +78,15 @@ def generate_launch_description():
         output='screen'
     )
 
+    # 将 Nav2 输出的 /cmd_vel 转发到小车实际监听的话题
+    cmd_vel_relay = Node(
+        package='topic_tools',
+        executable='relay',
+        name='cmd_vel_relay',
+        parameters=[{'use_sim_time': True}],
+        arguments=['/cmd_vel', '/camera_robot/cmd_vel'],
+    )
+
     return LaunchDescription([
         map_arg,
         spawn,
@@ -86,4 +95,5 @@ def generate_launch_description():
         tf_base_to_camera,
         nav2,
         rviz,
+        cmd_vel_relay,
     ])

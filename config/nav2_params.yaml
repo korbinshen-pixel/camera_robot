@@ -84,7 +84,7 @@ controller_server:
       min_lookahead_dist: 0.3
       max_lookahead_dist: 0.9
       lookahead_time: 1.5
-      rotate_to_heading_angular_vel: 0.8
+      rotate_to_heading_angular_vel: 2.0
       transform_tolerance: 0.1
       use_velocity_scaled_lookahead_dist: false
       min_approach_linear_velocity: 0.05
@@ -98,7 +98,7 @@ controller_server:
       regulated_linear_scaling_min_speed: 0.25
       use_rotate_to_heading: true
       rotate_to_heading_min_angle: 0.785
-      max_angular_accel: 3.2
+      max_angular_accel: 5.0
       max_robot_pose_search_dist: 10.0
 
 planner_server:
@@ -117,20 +117,20 @@ behavior_server:
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 10.0
-    behavior_plugins: ["spin", "back_up", "wait"]
+    behavior_plugins: ["spin", "backup", "wait"]
     spin:
-      plugin: "nav2_behaviors::Spin"
-    back_up:
-      plugin: "nav2_behaviors::BackUp"
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
     wait:
-      plugin: "nav2_behaviors::Wait"
+      plugin: "nav2_behaviors/Wait"
     global_frame: odom
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.8
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    max_rotational_vel: 2.0
+    min_rotational_vel: 0.8
+    rotational_acc_lim: 5.0
 
 local_costmap:
   local_costmap:
@@ -231,10 +231,10 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.4, 0.0, 0.8]
-    min_velocity: [-0.4, 0.0, -0.8]
-    max_accel: [2.5, 0.0, 3.2]
-    max_decel: [-2.5, 0.0, -3.2]
+    max_velocity: [0.4, 0.0, 2.0]
+    min_velocity: [-0.4, 0.0, -2.0]
+    max_accel: [2.5, 0.0, 5.0]
+    max_decel: [-2.5, 0.0, -5.0]
     odom_topic: /camera_robot/odom
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
