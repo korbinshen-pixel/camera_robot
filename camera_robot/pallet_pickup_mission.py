@@ -8,6 +8,7 @@ from rclpy.time import Time
 
 from geometry_msgs.msg import Twist, PoseStamped
 from std_msgs.msg import Bool
+from visualization_msgs.msg import Marker
 from tf2_ros import (
     Buffer,
     TransformListener,
@@ -17,6 +18,7 @@ from tf2_ros import (
 )
 
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from gazebo_msgs.msg import ModelStates
 
 
 def quat_to_yaw(q) -> float:
@@ -53,13 +55,13 @@ class PalletPickupMission(Node):
 
         # 参数
         self.declare_parameter('search_angular_z', 0.30)   # 保留，但 SEARCH 已不再直接用
-        self.declare_parameter('goal_offset_m', 0.60)
+        self.declare_parameter('goal_offset_m', 2.00)
         self.declare_parameter('final_forward_speed', 0.08)
         self.declare_parameter('final_forward_time', 6.0)
         self.declare_parameter('stop_spin_duration', 0.8)  # 这版不再用，可以留着
         self.declare_parameter('lock_confirm_count', 5)    # 这版不再用，可以留着
         self.declare_parameter('pallet_min_dist', 0.4)
-        self.declare_parameter('pallet_max_dist', 2.5)
+        self.declare_parameter('pallet_max_dist', 3.5)
         self.declare_parameter('nav_timeout_sec', 60.0)
         self.declare_parameter('pallet_topic', '/camera_robot/pallet_pose')
         self.declare_parameter('cmd_vel_topic', '/camera_robot/cmd_vel')
@@ -89,7 +91,9 @@ class PalletPickupMission(Node):
         # 两段 10 帧采样缓冲
         self.first_samples = []              # 第一次命中后用于平均（相机系）
         self.second_samples = []             # 到达目标后用于验证（相机系）
-        self.samples_needed = 10
+        self.samples_needed = 20
+        self._stop_settle_start = None
+        self._extra_spin_done = False
 
         # 任务开始标志（默认为 auto_start）
         self.start_mission = self.auto_start
@@ -120,6 +124,26 @@ class PalletPickupMission(Node):
             self._start_cb,
             10
         )
+
+        self.pallet_marker_pub = self.create_publisher(
+            Marker,
+            '/camera_robot/pallet_marker_est',
+            10
+        )
+        self.goal_marker_pub = self.create_publisher(
+            Marker,
+            '/camera_robot/pallet_goal_marker',
+            10
+        )
+        # 订阅 Gazebo 模型状态
+        self.gazebo_sub = self.create_subscription(
+            ModelStates,
+            '/gazebo/model_states',
+            self._gazebo_model_states_cb,
+            10
+        )
+        self._gazebo_pallet_pose = None
+        self.PALLET_MODEL_NAME = 'pallet'  # ← 改成你在 Gazebo 里的模型名
 
         # TF / Nav2
         self.tf_buffer = Buffer()
@@ -205,6 +229,11 @@ class PalletPickupMission(Node):
             self.final_start_time = None
             self.second_samples = []
 
+        if new_state == self.STATE_STOP_SPIN:
+            self._stop_settle_start = None
+            self._settle_flushed = False
+            self.first_samples = []
+
     # Nav2 Spin 搜索控制
     def _start_nav_spin_search(self):
         try:
@@ -252,6 +281,15 @@ class PalletPickupMission(Node):
 
     # ---------------- 坐标 / 目标计算 ----------------
 
+    def _gazebo_model_states_cb(self, msg: ModelStates):
+        if self.PALLET_MODEL_NAME in msg.name:
+            idx = msg.name.index(self.PALLET_MODEL_NAME)
+            pose = PoseStamped()
+            pose.header.frame_id = 'map'
+            pose.header.stamp = self.get_clock().now().to_msg()
+            pose.pose = msg.pose[idx]   # 直接拿 position + orientation
+            self._gazebo_pallet_pose = pose
+
     def _estimate_pallet_in_map(self, avg_cam: PoseStamped) -> PoseStamped:
         """
         使用 Tx/Tz + 机器人位姿估计托盘在 map 下的平面位置。
@@ -285,8 +323,8 @@ class PalletPickupMission(Node):
 
         # 前方向量 (cos_r, sin_r)
         # 左方向量 (-sin_r, cos_r)
-        dx = tz * cos_r + tx * (-sin_r)
-        dy = tz * sin_r + tx * ( cos_r)
+        dx = tz * cos_r + tx * ( sin_r)
+        dy = tz * sin_r + tx * (-cos_r)
 
         px = bx + dx
         py = by + dy
@@ -304,15 +342,14 @@ class PalletPickupMission(Node):
 
     def _compute_nav_goal(self, pallet_map: PoseStamped) -> PoseStamped:
         """
-        托盘 yaw 只用于求托盘正前方方向；
-        目标点 = 托盘中心沿该方向偏移 goal_offset；
+        托盘正反面对称，计算正面和背面两个候选目标点，选距离机器人更近的那个。
+        目标点 = 托盘中心沿正面/背面方向偏移 goal_offset；
         目标朝向 = 从目标点看向托盘中心。
         """
-        # 托盘中心
         px = pallet_map.pose.position.x
         py = pallet_map.pose.position.y
 
-        # 当前机器人 yaw（map 下），用于把“托盘正前方向”从 base_link 系转到 map 系
+        # 当前机器人 yaw（map 下）
         try:
             tf_rb = self.tf_buffer.lookup_transform(
                 self.map_frame,
@@ -322,24 +359,24 @@ class PalletPickupMission(Node):
             )
             q_rb = tf_rb.transform.rotation
             robot_yaw = quat_to_yaw(q_rb)
+            robot_x = tf_rb.transform.translation.x
+            robot_y = tf_rb.transform.translation.y
         except (LookupException, ConnectivityException, ExtrapolationException) as e:
             self.get_logger().warn(f'[TF] 获取 base_link yaw 失败: {e}')
             robot_yaw = 0.0
+            robot_x, robot_y = 0.0, 0.0
 
-        # 网络给的托盘 yaw（在 camera/base_link 系）：-90° 时托盘正面对相机
+        # 网络给的托盘 yaw（camera/base_link 系）
         pallet_yaw_cam = quat_to_yaw(pallet_map.pose.orientation)
 
-        # 设定：在 pallet_yaw_cam = -90° 时，托盘正面法线指向相机（也就是 base_link 的 -x 方向）
-        # 相对于 base_link 前向 x 轴，托盘正前方向的角度为：
-        forward_angle_base = pallet_yaw_cam + math.radians(90.0)
+        # 托盘正前方向（base_link 系）
+        forward_angle_base = pallet_yaw_cam + math.radians(180.0)
 
-        # base_link 系中托盘正前方向单位向量（x forward, y left）
-        nx_base = math.cos(forward_angle_base)
-        ny_base = math.sin(forward_angle_base)
-
-        # 旋转到 map 系：n_world = R(robot_yaw) * n_base
+        # base_link → map 旋转
         cos_r = math.cos(robot_yaw)
         sin_r = math.sin(robot_yaw)
+        nx_base = math.cos(forward_angle_base)
+        ny_base = math.sin(forward_angle_base)
         nx_world = nx_base * cos_r - ny_base * sin_r
         ny_world = nx_base * sin_r + ny_base * cos_r
 
@@ -351,25 +388,115 @@ class PalletPickupMission(Node):
             nx_world /= norm
             ny_world /= norm
 
-        # 目标点 = 托盘中心 + goal_offset * 托盘正前方向
-        gx = px + self.goal_offset * nx_world
-        gy = py + self.goal_offset * ny_world
+        # 正面和背面两个候选目标点
+        candidates = []
+        for sign, label in [(+1.0, '正面'), (-1.0, '背面')]:
+            gx = px + self.goal_offset * sign * nx_world
+            gy = py + self.goal_offset * sign * ny_world
+            yaw_to_pallet = math.atan2(py - gy, px - gx)
 
-        # 目标朝向：从目标点看向托盘中心
-        yaw_to_pallet = math.atan2(py - gy, px - gx)
+            goal = PoseStamped()
+            goal.header.frame_id = self.map_frame
+            goal.header.stamp = self.get_clock().now().to_msg()
+            goal.pose.position.x = gx
+            goal.pose.position.y = gy
+            goal.pose.position.z = 0.0
+            goal.pose.orientation = yaw_to_quat(yaw_to_pallet)
+            candidates.append((goal, label))
 
-        goal = PoseStamped()
-        goal.header.frame_id = self.map_frame
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.position.x = gx
-        goal.pose.position.y = gy
-        goal.pose.position.z = 0.0
-        goal.pose.orientation = yaw_to_quat(yaw_to_pallet)
+        # 选距离机器人更近的候选点
+        def dist_to_robot(item):
+            g, _ = item
+            return math.hypot(g.pose.position.x - robot_x,
+                            g.pose.position.y - robot_y)
 
+        chosen_goal, chosen_label = min(candidates, key=dist_to_robot)
+
+        d0 = dist_to_robot(candidates[0])
+        d1 = dist_to_robot(candidates[1])
         self.get_logger().info(
-            f'[NAV] 导航目标点: ({gx:.2f}, {gy:.2f}), 朝向(面向托盘): {math.degrees(yaw_to_pallet):.1f}°'
+            f'[NAV] 选择{chosen_label} | '
+            f'正面距离: {d0:.2f}m, 背面距离: {d1:.2f}m | '
+            f'目标点: ({chosen_goal.pose.position.x:.2f}, {chosen_goal.pose.position.y:.2f}), '
+            f'朝向: {math.degrees(quat_to_yaw(chosen_goal.pose.orientation)):.1f}°'
         )
-        return goal
+        return chosen_goal
+
+
+    def _publish_pallet_marker(self, pallet_map: PoseStamped):
+        marker = Marker()
+        marker.header.frame_id = self.map_frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = 'pallet_est'
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+
+        marker.pose.position.x = pallet_map.pose.position.x
+        marker.pose.position.y = pallet_map.pose.position.y
+        marker.pose.position.z = 0.05
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.x = 0.20
+        marker.scale.y = 0.20
+        marker.scale.z = 0.20
+
+        marker.color.a = 1.0
+        marker.color.r = 1.0
+        marker.color.g = 0.3
+        marker.color.b = 0.0
+
+        marker.lifetime.sec = 0
+        self.pallet_marker_pub.publish(marker)
+
+    def _publish_goal_marker(self, goal: PoseStamped):
+        # 目标点球
+        marker = Marker()
+        marker.header.frame_id = self.map_frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = 'nav_goal'
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+
+        marker.pose.position.x = goal.pose.position.x
+        marker.pose.position.y = goal.pose.position.y
+        marker.pose.position.z = 0.05
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.x = 0.18
+        marker.scale.y = 0.18
+        marker.scale.z = 0.18
+
+        marker.color.a = 1.0
+        marker.color.r = 0.0
+        marker.color.g = 0.4
+        marker.color.b = 1.0
+
+        marker.lifetime.sec = 0
+        self.goal_marker_pub.publish(marker)
+
+        # 目标点朝向箭头
+        arrow = Marker()
+        arrow.header.frame_id = self.map_frame
+        arrow.header.stamp = self.get_clock().now().to_msg()
+        arrow.ns = 'nav_goal_arrow'
+        arrow.id = 1
+        arrow.type = Marker.ARROW
+        arrow.action = Marker.ADD
+        arrow.pose = goal.pose
+
+        arrow.scale.x = 0.35   # 箭头长度
+        arrow.scale.y = 0.06   # 箭头宽
+        arrow.scale.z = 0.06
+
+        arrow.color.a = 1.0
+        arrow.color.r = 0.0
+        arrow.color.g = 0.8
+        arrow.color.b = 1.0
+
+        arrow.lifetime.sec = 0
+        self.goal_marker_pub.publish(arrow)
 
     def _average_poses(self, poses):
         """对 camera_link 下多帧位姿做简单位置平均，方向先用第一帧的朝向。"""
@@ -415,41 +542,72 @@ class PalletPickupMission(Node):
 
         # 2. 搜索托盘：调用 Nav2 Spin 分段原地旋转，第一次看到就停
         if self.state == self.STATE_SEARCH:
-            # 一旦检测到托盘：取消当前 spin 任务，停止，进入采样状态
             if self.latest_pallet is not None:
-                if self.search_spin_task_active:
-                    try:
-                        self.navigator.cancelTask()
-                    except Exception:
-                        pass
-                    self.search_spin_task_active = False
+                # 先补转 5°
+                if not self._extra_spin_done:
+                    if not self.search_spin_task_active:
+                        if self.search_spin_task_active:
+                            try:
+                                self.navigator.cancelTask()
+                            except Exception:
+                                pass
+                        try:
+                            self.navigator.spin(
+                                spin_dist=math.radians(10.0),
+                                time_allowance=5
+                            )
+                            self.search_spin_task_active = True
+                            self.get_logger().info('[搜索] 检测到托盘，补转 10°...')
+                        except Exception as e:
+                            self.get_logger().error(f'[搜索] 补转失败: {e}，直接停车')
+                            self._extra_spin_done = True
+                        return
 
+                    if self.navigator.isTaskComplete():
+                        self.search_spin_task_active = False
+                        self._extra_spin_done = True
+                        self.get_logger().info('[搜索] 补转 5° 完成，进入停车采样')
+                    return
+
+                # 补转完成，进入停车采样
                 self._stop()
-                self.first_samples = []
-                self.get_logger().info(
-                    '[搜索] 第一次检测到托盘，停止 Nav2 Spin 并开始采样 10 帧...'
-                )
+                self.get_logger().info('[搜索] 停止并开始采样...')
                 self._enter_state(self.STATE_STOP_SPIN)
                 return
 
-            # 没检测到托盘：如果没有 spin 任务，就发起一次小角度 Nav2 Spin
+            # 没检测到托盘，正常 Spin 搜索
             if not self.search_spin_task_active:
                 self._start_nav_spin_search()
                 return
 
-            # 有 spin 任务：轮询它是否完成，完成后再发下一次 spin
             if self.navigator.isTaskComplete():
                 result = self.navigator.getResult()
                 self.search_spin_task_active = False
-                self.get_logger().info(
-                    f'[搜索] 本轮 Nav2 Spin 完成，result={result}'
-                )
+                self.get_logger().info(f'[搜索] 本轮 Nav2 Spin 完成，result={result}')
             return
 
         # 3. 停车 + 第一次 10 帧平均，算导航目标
         if self.state == self.STATE_STOP_SPIN:
             self._stop()
 
+            # Step 1: 等停稳 1 秒
+            if self._stop_settle_start is None:
+                self._stop_settle_start = self.get_clock().now()
+                self.get_logger().info('[停车] 等待车体停稳 1 秒...')
+                return
+
+            elapsed = (self.get_clock().now() - self._stop_settle_start).nanoseconds / 1e9
+            if elapsed < 1.0:
+                return
+
+            # Step 2: 1 秒刚到时，清掉停稳前积累的脏数据，重新开始采样
+            if not hasattr(self, '_settle_flushed') or not self._settle_flushed:
+                self.first_samples = []
+                self._settle_flushed = True
+                self.get_logger().info('[停车] 停稳完成，开始采样 10 帧...')
+                return
+
+            # Step 3: 等够 10 帧
             if len(self.first_samples) < self.samples_needed:
                 self.get_logger().info(
                     f'[采样1] 已采样 {len(self.first_samples)}/{self.samples_needed} 帧...',
@@ -457,7 +615,7 @@ class PalletPickupMission(Node):
                 )
                 return
 
-            # 采样够 10 帧，算平均 → 用 Tx/Tz + robot pose 估托盘 map 位置 → 设定导航目标
+            # Step 4: 采样完成，估计位置
             avg_cam = self._average_poses(self.first_samples)
             pallet_map = self._estimate_pallet_in_map(avg_cam)
             if pallet_map is None:
@@ -466,12 +624,15 @@ class PalletPickupMission(Node):
                 return
 
             self.locked_pallet_map = pallet_map
+            self._publish_pallet_marker(pallet_map)
+
             self.get_logger().info(
                 f'[采样1] 托盘平均位置(map): '
                 f'({pallet_map.pose.position.x:.2f}, {pallet_map.pose.position.y:.2f})'
             )
 
             goal = self._compute_nav_goal(self.locked_pallet_map)
+            self._publish_goal_marker(goal)
             self.navigator.goToPose(goal)
             self._enter_state(self.STATE_NAV_APPROACH)
             return
@@ -529,6 +690,14 @@ class PalletPickupMission(Node):
                     self._reset_search()
                     return
 
+                # 角度检测：托盘 yaw 在相机系下，正对时约为 -90°
+                # 允许偏差范围，超出说明托盘侧对着机器人
+                pallet_yaw_cam = quat_to_yaw(avg_cam.pose.orientation)
+                # 归一化到 [-π, π]
+                # 正对托盘时 yaw ≈ ±90°（±π/2），允许 ±30° 偏差
+                angle_to_front = abs(pallet_yaw_cam) 
+                angle_thresh = math.radians(10.0)  # 可调
+
                 # 简单判定：z 前后，x 左右
                 x = avg_cam.pose.position.x
                 z = avg_cam.pose.position.z
@@ -540,6 +709,15 @@ class PalletPickupMission(Node):
                     )
                     self._reset_search()
                     return
+
+                if angle_to_front > angle_thresh:
+                    self.get_logger().warn(
+                        f'[采样2] 托盘角度偏差过大({math.degrees(angle_to_front):.1f}° > '
+                        f'{math.degrees(angle_thresh):.1f}°)，回到 SEARCH'
+                    )
+                    self._reset_search()
+                    return
+
 
                 self.get_logger().info(
                     f'[采样2] 托盘在正前方范围内，开始直行靠近(z={z:.2f}, x={x:.2f})'
@@ -582,6 +760,8 @@ class PalletPickupMission(Node):
         self.first_samples = []
         self.second_samples = []
         self.final_start_time = None
+        self._settle_flushed = False
+        self._stop_settle_start = None 
         self._enter_state(self.STATE_SEARCH)
 
     def destroy_node(self):
